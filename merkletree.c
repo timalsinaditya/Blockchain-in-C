@@ -1,7 +1,11 @@
 #include "merkletree.h"
 
+#include <openssl/crypto.h>
 #include <stdlib.h>
 #include <string.h>
+#include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
 
 Node *create_node(const unsigned char *hash) {
     Node *new_node = (Node *)malloc(sizeof(Node));
@@ -110,7 +114,7 @@ MerkleTree *create_tree(unsigned char **transaction_hashes, size_t num_transacti
     return tree;
 }
 
-void combine_hashes(unsigned char *hash1, unsigned char *hash2, unsigned char *combined_hash) {
+void combine_hashes(const unsigned char *hash1, const unsigned char *hash2, unsigned char *combined_hash) {
     if(!hash1 || !hash2 || !combined_hash) {
         fprintf(stderr, "ERROR: Failed to combine hashes!\n");
         return;
@@ -126,4 +130,71 @@ void combine_hashes(unsigned char *hash1, unsigned char *hash2, unsigned char *c
         fprintf(stderr, "ERROR: Failed to calculate hash!\n");
         return;
     }
+}
+
+boolean calculate_hash(const unsigned char *data, size_t data_len, unsigned char *hash, unsigned int *hash_length) {
+    OSSL_LIB_CTX *lib;
+    boolean temp = FALSE;
+    const char *opt_properties = NULL;
+    EVP_MD *message_digest = NULL;
+    EVP_MD_CTX *digest_context = NULL;
+
+    lib = OSSL_LIB_CTX_new();
+    if(! lib) {
+        fprintf(stderr, "ERROR: OSSL_LIB_CTX_new() returned NULL!\n");
+        goto cleanup;
+    }
+
+    message_digest = EVP_MD_fetch(lib, "SHA3-256", opt_properties);
+
+    if(! message_digest) {
+        fprintf(stderr, "ERROR: SHA3-256 couldnot be fetched!\n");
+        goto cleanup;
+    }
+
+    *hash_length = EVP_MD_get_size(message_digest);
+
+    if(*hash_length <= 0) {
+        fprintf(stderr, "EVP_MP_get_size returned invalid size.\n");
+        goto cleanup;
+    }
+
+    if (*hash_length > HASH_SIZE) {
+        fprintf(stderr, "Provided digest buffer is too small.\n");
+        goto cleanup;
+    }
+
+    digest_context = EVP_MD_CTX_new();
+
+    if(digest_context == NULL) {
+        fprintf(stderr, "EVP_MD_CTX_new failed.\n");
+        goto cleanup;
+    }
+
+    if(EVP_DigestInit(digest_context, message_digest) != 1) {
+        fprintf(stderr, "EVP_DigestInit failed.\n");
+        goto cleanup;
+    }
+
+    if(EVP_DigestUpdate(digest_context, data, data_len) != 1) {
+        fprintf(stderr, "EVP_DigestUpdate failed.\n");
+        goto cleanup;
+    }
+
+    if(EVP_DigestFinal(digest_context, hash, hash_length) != 1) {
+        fprintf(stderr, "EVP_DigestFinal failed.\n");
+        goto cleanup;
+    }
+
+    temp = TRUE;
+
+    cleanup:
+        if(temp != TRUE)
+            ERR_print_errors_fp(stderr);
+
+        EVP_MD_CTX_free(digest_context);
+        EVP_MD_free(message_digest);
+        OSSL_LIB_CTX_free(lib);
+
+    return temp;
 }
